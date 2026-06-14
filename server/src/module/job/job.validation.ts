@@ -47,7 +47,7 @@ export const createJobSchema = z.object({
   company: z.string(),
   status: z.enum(["DRAFT", "PUBLISHED", "CLOSED", "ARCHIVED"]).default("DRAFT"),
   customFields: z.array(customFieldDefinitionSchema).default([]),
-  deadline: z.iso.datetime().optional(),
+  deadline: z.string().datetime().optional(),
   tags: z.array(z.string()).default([]),
 });
 
@@ -77,4 +77,12 @@ export const jobQuerySchema = z.object({
   includeExpired: coerceBoolean.default(false),
   salaryMin: z.coerce.number().int().nonnegative().optional(),
   salaryMax: z.coerce.number().int().nonnegative().optional(),
+}).refine((data) => {
+  if (data.salaryMin !== undefined && data.salaryMax !== undefined) {
+    return data.salaryMin <= data.salaryMax;
+  }
+  return true;
+}, {
+  message: "Minimum salary cannot be greater than maximum salary",
+  path: ["salaryMin"],
 });

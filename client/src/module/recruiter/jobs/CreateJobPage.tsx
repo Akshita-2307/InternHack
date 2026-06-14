@@ -9,6 +9,9 @@ import { RoundsManager } from "../rounds/RoundsManager";
 import type { CustomFieldDefinition } from "../../../lib/types";
 import { SEO } from "../../../components/SEO";
 import { Button } from "../../../components/ui/button";
+import toast from "../../../components/ui/toast";
+import { GridBackground } from "../../../components/ui/GridBackground";
+
 
 interface RoundInput {
   name: string;
@@ -57,8 +60,15 @@ export default function CreateJobPage() {
   const canAdvance = stepIdx === 0 ? basicsComplete : true;
 
   const handleSubmit = async () => {
-    setError("");
-    setLoading(true);
+  if (loading) return;
+
+  if (form.description.length > 5000) {
+    setError("Description cannot exceed 5000 characters");
+    return;
+  }
+
+  setError("");
+  setLoading(true);
 
     try {
       const { data } = await api.post("/jobs", {
@@ -68,7 +78,7 @@ export default function CreateJobPage() {
         salary: form.salary,
         company: form.company,
         deadline: form.deadline ? new Date(form.deadline).toISOString() : undefined,
-        tags: form.tags.split(",").map((t) => t.trim()).filter(Boolean),
+        tags: [...new Set(form.tags.split(",").map((t) => t.trim()).filter(Boolean))],
         customFields,
         status: "DRAFT",
       });
@@ -88,6 +98,7 @@ export default function CreateJobPage() {
         });
       }
 
+      toast.success("Job created successfully");
       navigate("/recruiters/jobs");
     } catch (err: unknown) {
       const error = err as { response?: { data?: { message?: string; errors?: { fieldErrors?: Record<string, string[]> } } } };
@@ -109,14 +120,7 @@ export default function CreateJobPage() {
     <div className="relative text-stone-900 dark:text-stone-50">
       <SEO title="Create Job" noIndex />
 
-      <div
-        aria-hidden
-        className="absolute inset-0 pointer-events-none opacity-[0.04] dark:opacity-[0.05] z-0"
-        style={{
-          backgroundImage: "linear-gradient(to right, rgba(120,113,108,0.25) 1px, transparent 1px)",
-          backgroundSize: "120px 100%",
-        }}
-      />
+      <GridBackground />
 
       <div className="relative max-w-4xl mx-auto">
         {/* Editorial header */}
@@ -257,12 +261,24 @@ export default function CreateJobPage() {
                   hint="Responsibilities, requirements, the kind of person you're looking for."
                 >
                   <textarea
-                    id="description"
-                    value={form.description}
-                    onChange={(e) => setForm({ ...form, description: e.target.value })}
-                    placeholder="Describe the role..."
-                    className={`${inputClass()} min-h-40 resize-y`}
-                  />
+  id="description"
+  value={form.description}
+  maxLength={5000}
+  onChange={(e) =>
+    setForm({
+      ...form,
+      description: e.target.value.slice(0, 5000),
+    })
+  }
+  placeholder="Describe the role..."
+  className={`${inputClass()} min-h-40 resize-y`}
+/>
+
+<div className="mt-2 flex justify-end">
+  <span className="text-xs text-stone-500">
+    {form.description.length} / 5000
+  </span>
+</div>
                 </Field>
 
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-5">
@@ -276,7 +292,7 @@ export default function CreateJobPage() {
                       className={inputClass()}
                     />
                   </Field>
-                  <Field label="Salary" htmlFor="salary">
+                  <Field label="Salary" htmlFor="salary" hint="e.g. 15k-25k / month or ₹10 LPA">
                     <input
                       id="salary"
                       type="text"
@@ -305,6 +321,7 @@ export default function CreateJobPage() {
                       type="date"
                       value={form.deadline}
                       onChange={(e) => setForm({ ...form, deadline: e.target.value })}
+                      min={new Date().toISOString().split("T")[0]}
                       className={inputClass()}
                     />
                   </Field>

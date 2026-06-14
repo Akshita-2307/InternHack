@@ -1,6 +1,6 @@
 import { useState, useCallback, useMemo } from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import { Link } from "react-router";
+import { Link, useSearchParams } from "react-router";
 import { useQuery, keepPreviousData } from "@tanstack/react-query";
 import {
   Search as SearchIcon,
@@ -42,6 +42,57 @@ const defaultFilters: TalentFilters = {
   jobStatus: "",
 };
 
+const talentFilterKeys: (keyof TalentFilters)[] = [
+  "search",
+  "skills",
+  "verifiedSkills",
+  "college",
+  "graduationYearMin",
+  "graduationYearMax",
+  "minAtsScore",
+  "location",
+  "jobStatus",
+];
+
+function parsePositiveInt(value: string | null, fallback: number) {
+  const parsed = Number(value);
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : fallback;
+}
+
+function parseAtsScore(value: string | null) {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) return defaultFilters.minAtsScore;
+  return Math.min(100, Math.max(0, parsed));
+}
+
+function getFiltersFromSearchParams(searchParams: URLSearchParams): TalentFilters {
+  return {
+    search: searchParams.get("search") ?? defaultFilters.search,
+    skills: searchParams.get("skills") ?? defaultFilters.skills,
+    verifiedSkills: searchParams.get("verifiedSkills") ?? defaultFilters.verifiedSkills,
+    college: searchParams.get("college") ?? defaultFilters.college,
+    graduationYearMin: searchParams.get("graduationYearMin") ?? defaultFilters.graduationYearMin,
+    graduationYearMax: searchParams.get("graduationYearMax") ?? defaultFilters.graduationYearMax,
+    minAtsScore: parseAtsScore(searchParams.get("minAtsScore")),
+    location: searchParams.get("location") ?? defaultFilters.location,
+    jobStatus: searchParams.get("jobStatus") ?? defaultFilters.jobStatus,
+  };
+}
+
+function buildTalentSearchParams(filters: TalentFilters, page = 1) {
+  const params = new URLSearchParams();
+  talentFilterKeys.forEach((key) => {
+    const value = filters[key];
+    if (key === "minAtsScore") {
+      if ((value as number) > 0) params.set(key, String(value));
+      return;
+    }
+    if (value) params.set(key, String(value));
+  });
+  if (page > 1) params.set("page", String(page));
+  return params;
+}
+
 const JOB_STATUS_OPTIONS = [
   { key: "", label: "All" },
   { key: "LOOKING", label: "Looking" },
@@ -61,9 +112,21 @@ const labelClass =
   "block text-[10px] font-mono uppercase tracking-widest text-stone-500 mb-1.5";
 
 export default function TalentSearchPage() {
-  const [filters, setFilters] = useState<TalentFilters>(defaultFilters);
-  const [appliedFilters, setAppliedFilters] = useState<TalentFilters>(defaultFilters);
-  const [page, setPage] = useState(1);
+  const [searchParams, setSearchParams] = useSearchParams();
+  const searchParamsKey = searchParams.toString();
+  const appliedFilters = useMemo(
+    () => getFiltersFromSearchParams(new URLSearchParams(searchParamsKey)),
+    [searchParamsKey],
+  );
+  const page = useMemo(
+    () => parsePositiveInt(new URLSearchParams(searchParamsKey).get("page"), 1),
+    [searchParamsKey],
+  );
+  const [draftFilters, setDraftFilters] = useState(() => ({
+    source: searchParamsKey,
+    values: appliedFilters,
+  }));
+  const filters = draftFilters.source === searchParamsKey ? draftFilters.values : appliedFilters;
   const [showFilters, setShowFilters] = useState(false);
 
   const { data: savedIdsData } = useQuery({
@@ -72,12 +135,12 @@ export default function TalentSearchPage() {
       const res = await api.get("/recruiter/saved-candidates/ids");
       return (res.data?.ids ?? []) as number[];
     },
-    staleTime: 1000 * 60,
+    staleTime: 1000 * 60 * 5,
   });
 
   const savedSet = useMemo(() => new Set(savedIdsData ?? []), [savedIdsData]);
 
-  const { data, isLoading } = useQuery({
+  const { data, isLoading, isFetching } = useQuery({
     queryKey: queryKeys.recruiter.talentSearch({ ...appliedFilters, page }),
     queryFn: async () => {
       const params = new URLSearchParams({ page: String(page), limit: "12" });
@@ -95,28 +158,34 @@ export default function TalentSearchPage() {
       return res.data as TalentSearchResponse;
     },
     placeholderData: keepPreviousData,
+    staleTime: 1000 * 60 * 5,
   });
 
   const applyFilters = useCallback(() => {
-    setAppliedFilters({ ...filters });
-    setPage(1);
-  }, [filters]);
+    const nextParams = buildTalentSearchParams(filters);
+    setDraftFilters({ source: nextParams.toString(), values: filters });
+    setSearchParams(nextParams);
+  }, [filters, setSearchParams]);
 
   const clearFilters = useCallback(() => {
-    setFilters(defaultFilters);
-    setAppliedFilters(defaultFilters);
-    setPage(1);
-  }, []);
+    const nextParams = new URLSearchParams();
+    setDraftFilters({ source: nextParams.toString(), values: defaultFilters });
+    setSearchParams(nextParams);
+  }, [setSearchParams]);
 
   const updateFilter = <K extends keyof TalentFilters>(key: K, value: TalentFilters[K]) => {
-    setFilters((prev) => ({ ...prev, [key]: value }));
+    setDraftFilters({ source: searchParamsKey, values: { ...filters, [key]: value } });
   };
 
   const setJobStatus = (status: string) => {
     const next = { ...filters, jobStatus: status };
-    setFilters(next);
-    setAppliedFilters(next);
-    setPage(1);
+    const nextParams = buildTalentSearchParams(next);
+    setDraftFilters({ source: nextParams.toString(), values: next });
+    setSearchParams(nextParams);
+  };
+
+  const setPage = (nextPage: number) => {
+    setSearchParams(buildTalentSearchParams(appliedFilters, nextPage));
   };
 
   const students = data?.students ?? [];
@@ -181,8 +250,10 @@ export default function TalentSearchPage() {
       {/* Search bar */}
       <div className="mb-4 flex items-center gap-2">
         <div className="relative flex-1">
-          <SearchIcon className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-stone-400" />
+          <SearchIcon className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-stone-400 dark:text-stone-300" />
           <input
+            id="talent-search"
+            aria-label="Search candidates by name, email, or skill"
             type="text"
             value={filters.search}
             onChange={(e) => updateFilter("search", e.target.value)}
@@ -191,8 +262,8 @@ export default function TalentSearchPage() {
             className="w-full pl-9 pr-3 py-2.5 rounded-md bg-white dark:bg-stone-950 border border-stone-200 dark:border-white/10 text-sm text-stone-900 dark:text-stone-100 placeholder:text-stone-400 dark:placeholder:text-stone-500 focus:outline-none focus:border-stone-900 dark:focus:border-stone-50 transition-colors"
           />
         </div>
-        <Button variant="primary" size="md" onClick={applyFilters}>
-          Search
+        <Button variant="primary" size="md" onClick={applyFilters} disabled={isFetching}>
+          {isFetching ? "Searching..." : "Search"}
         </Button>
       </div>
 
@@ -204,11 +275,10 @@ export default function TalentSearchPage() {
             <button
               key={opt.key}
               onClick={() => setJobStatus(opt.key)}
-              className={`px-3 py-1.5 rounded-md text-xs font-medium border transition-colors ${
-                active
-                  ? "bg-stone-900 dark:bg-stone-50 text-stone-50 dark:text-stone-900 border-stone-900 dark:border-stone-50"
-                  : "bg-white dark:bg-stone-950 text-stone-600 dark:text-stone-400 border-stone-200 dark:border-white/10 hover:border-stone-400 dark:hover:border-white/30"
-              }`}
+              className={`px-3 py-1.5 rounded-md text-xs font-medium border transition-colors ${active
+                ? "bg-stone-900 dark:bg-stone-50 text-stone-50 dark:text-stone-900 border-stone-900 dark:border-stone-50"
+                : "bg-white dark:bg-stone-950 text-stone-600 dark:text-stone-400 border-stone-200 dark:border-white/10 hover:border-stone-400 dark:hover:border-white/30"
+                }`}
             >
               {opt.label}
             </button>
@@ -219,11 +289,10 @@ export default function TalentSearchPage() {
 
         <button
           onClick={() => setShowFilters((v) => !v)}
-          className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium border transition-colors ${
-            activeFilterCount > 0
-              ? "bg-lime-400 text-stone-900 border-lime-400"
-              : "bg-white dark:bg-stone-950 text-stone-600 dark:text-stone-400 border-stone-200 dark:border-white/10 hover:border-stone-400 dark:hover:border-white/30"
-          }`}
+          className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium border transition-colors ${activeFilterCount > 0
+            ? "bg-lime-400 text-stone-900 border-lime-400"
+            : "bg-white dark:bg-stone-950 text-stone-600 dark:text-stone-400 border-stone-200 dark:border-white/10 hover:border-stone-400 dark:hover:border-white/30"
+            }`}
         >
           <SlidersHorizontal className="w-3.5 h-3.5" />
           Filters
@@ -258,8 +327,9 @@ export default function TalentSearchPage() {
           >
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 p-5 bg-white dark:bg-stone-950 border border-stone-200 dark:border-white/10 rounded-md">
               <div>
-                <label className={labelClass}>skills</label>
+                <label htmlFor="skills" className={labelClass}>skills</label>
                 <input
+                  id="skills"
                   type="text"
                   value={filters.skills}
                   onChange={(e) => updateFilter("skills", e.target.value)}
@@ -271,12 +341,12 @@ export default function TalentSearchPage() {
               </div>
 
               <div>
-                <label className={labelClass}>verified skills</label>
+                <label htmlFor="verifiedSkills" className={labelClass}>verified skills</label>
                 <input
+                  id="verifiedSkills"
                   type="text"
                   value={filters.verifiedSkills}
                   onChange={(e) => updateFilter("verifiedSkills", e.target.value)}
-                  onKeyDown={(e) => e.key === "Enter" && applyFilters()}
                   className={inputClass}
                   placeholder="javascript, react"
                 />
@@ -284,8 +354,9 @@ export default function TalentSearchPage() {
               </div>
 
               <div>
-                <label className={labelClass}>college</label>
+                <label htmlFor="college" className={labelClass}>college</label>
                 <input
+                  id="college"
                   type="text"
                   value={filters.college}
                   onChange={(e) => updateFilter("college", e.target.value)}
@@ -295,8 +366,9 @@ export default function TalentSearchPage() {
               </div>
 
               <div>
-                <label className={labelClass}>location</label>
+                <label htmlFor="location" className={labelClass}>location</label>
                 <input
+                  id="location"
                   type="text"
                   value={filters.location}
                   onChange={(e) => updateFilter("location", e.target.value)}
@@ -307,25 +379,35 @@ export default function TalentSearchPage() {
 
               <div>
                 <label className={labelClass}>graduation year</label>
+
                 <div className="grid grid-cols-2 gap-2">
-                  <input
-                    type="number"
-                    value={filters.graduationYearMin}
-                    onChange={(e) => updateFilter("graduationYearMin", e.target.value)}
-                    className={inputClass}
-                    placeholder="From"
-                    min={2000}
-                    max={2040}
-                  />
-                  <input
-                    type="number"
-                    value={filters.graduationYearMax}
-                    onChange={(e) => updateFilter("graduationYearMax", e.target.value)}
-                    className={inputClass}
-                    placeholder="To"
-                    min={2000}
-                    max={2040}
-                  />
+                  <div>
+                    <label htmlFor="gradYearMin" className={labelClass}>from</label>
+                    <input
+                      id="gradYearMin"
+                      type="number"
+                      value={filters.graduationYearMin}
+                      onChange={(e) => updateFilter("graduationYearMin", e.target.value)}
+                      className={inputClass}
+                      placeholder="From"
+                      min={2000}
+                      max={2040}
+                    />
+                  </div>
+
+                  <div>
+                    <label htmlFor="gradYearMax" className={labelClass}>to</label>
+                    <input
+                      id="gradYearMax"
+                      type="number"
+                      value={filters.graduationYearMax}
+                      onChange={(e) => updateFilter("graduationYearMax", e.target.value)}
+                      className={inputClass}
+                      placeholder="To"
+                      min={2000}
+                      max={2040}
+                    />
+                  </div>
                 </div>
               </div>
 
@@ -446,7 +528,7 @@ function EmptyState() {
   return (
     <div className="flex flex-col items-center justify-center py-20 text-center border border-dashed border-stone-200 dark:border-white/10 rounded-md bg-white dark:bg-stone-950">
       <div className="w-12 h-12 rounded-md bg-stone-100 dark:bg-stone-900 border border-stone-200 dark:border-white/10 flex items-center justify-center mb-4">
-        <Users className="w-5 h-5 text-stone-400" />
+        <Users className="w-5 h-5 text-stone-400 dark:text-stone-300" />
       </div>
       <h3 className="text-base font-semibold text-stone-900 dark:text-stone-50 mb-1">
         No candidates found

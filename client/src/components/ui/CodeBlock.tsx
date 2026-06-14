@@ -1,6 +1,7 @@
 import { useState, useCallback, useEffect } from "react";
 import { Copy, Check } from "lucide-react";
 import { PrismLight as SyntaxHighlighter } from "react-syntax-highlighter";
+
 import markup from "react-syntax-highlighter/dist/esm/languages/prism/markup";
 import css from "react-syntax-highlighter/dist/esm/languages/prism/css";
 import javascript from "react-syntax-highlighter/dist/esm/languages/prism/javascript";
@@ -13,8 +14,10 @@ import solidity from "react-syntax-highlighter/dist/esm/languages/prism/solidity
 import json from "react-syntax-highlighter/dist/esm/languages/prism/json";
 import sql from "react-syntax-highlighter/dist/esm/languages/prism/sql";
 import { vscDarkPlus, prism } from "react-syntax-highlighter/dist/esm/styles/prism";
+
 import { useThemeStore } from "../../lib/theme.store";
 import { Button } from "./button";
+import toast from "./toast";
 
 SyntaxHighlighter.registerLanguage("markup", markup);
 SyntaxHighlighter.registerLanguage("html", markup);
@@ -47,9 +50,16 @@ interface CodeBlockProps {
   label?: string;
   example?: CodeExample;
   language?: string;
+  onTryIt?: (code: string) => void;
 }
 
-export function CodeBlock({ code, label, example, language = "javascript" }: CodeBlockProps) {
+export function CodeBlock({
+  code,
+  label,
+  example,
+  language = "javascript",
+  onTryIt,
+}: CodeBlockProps) {
   const [copied, setCopied] = useState(false);
   const theme = useThemeStore((s) => s.theme);
 
@@ -69,16 +79,33 @@ export function CodeBlock({ code, label, example, language = "javascript" }: Cod
     try {
       await navigator.clipboard.writeText(activeCode);
       setCopied(true);
+      toast.success("Copied to clipboard!");
     } catch (err) {
       console.error("Failed to copy code: ", err);
+      toast.error("Failed to copy code");
     }
   }, [activeCode]);
+
+  // Allow copying with Ctrl/Cmd + C when the code block is focused, even if no text is selected
+  const handleKeyDown = useCallback(async (e: React.KeyboardEvent<HTMLDivElement>) => {
+      const selectedText = window.getSelection()?.toString();
+
+      // Allow normal copy behavior when text is selected
+      if (selectedText) return;
+
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "c") {
+        e.preventDefault();
+        await handleCopy();
+      }
+    },
+    [handleCopy]
+  );
 
   // Choose the syntax highlighting theme
   const syntaxTheme = theme === "dark" ? vscDarkPlus : prism;
 
   return (
-    <div className="rounded-md border border-stone-200 dark:border-white/10 overflow-hidden bg-white dark:bg-stone-900">
+    <div tabIndex={0} onKeyDown={handleKeyDown} className="rounded-md border border-stone-200 dark:border-white/10 overflow-hidden bg-white dark:bg-stone-900">
       {/* Code block header */}
       <div className="flex items-center justify-between px-4 py-2.5 bg-stone-50 dark:bg-stone-950/40 border-b border-stone-200 dark:border-white/10">
         <div className="flex items-center gap-2 min-w-0">
@@ -87,16 +114,41 @@ export function CodeBlock({ code, label, example, language = "javascript" }: Cod
             {activeTitle}
           </span>
         </div>
+        <div className="flex items-center gap-2">
+  {onTryIt && (
+    <Button
+      type="button"
+      variant="ghost"
+      size="sm"
+      onClick={() => onTryIt(activeCode)}
+      className="font-mono uppercase tracking-widest text-lime-600 hover:text-lime-500"
+    >
+      Try it →
+    </Button>
+  )}
+
+  <Button
+    type="button"
+    variant="ghost"
+    size="sm"
+    onClick={handleCopy}
+    aria-label={copied ? "Code copied" : "Copy code to clipboard"}
+    className="font-mono uppercase tracking-widest text-stone-600 dark:text-stone-400 hover:text-stone-900 dark:hover:text-stone-50 shrink-0 min-h-9 px-2"
+  >
+    {copied ? <Check className="w-3 h-3 text-lime-500" /> : <Copy className="w-3 h-3" />}
+    {copied ? "Copied" : "Copy"}
+  </Button>
+</div>
         <Button
           type="button"
           variant="ghost"
           size="sm"
           onClick={handleCopy}
           aria-label={copied ? "Code copied" : "Copy code to clipboard"}
-          className="font-mono uppercase tracking-widest text-stone-600 dark:text-stone-400 hover:text-stone-900 dark:hover:text-stone-50 shrink-0"
+          className="font-mono uppercase tracking-widest text-stone-600 dark:text-stone-400 hover:text-stone-900 dark:hover:text-stone-50 shrink-0 min-h-[36px] px-2"
         >
-          {copied ? <Check className="w-3 h-3 text-lime-500" /> : <Copy className="w-3 h-3" />}
-          {copied ? "copied" : "copy"}
+          {copied ? <Check aria-hidden="true" className="w-3 h-3 text-lime-500" /> : <Copy aria-hidden="true" className="w-3 h-3" />}
+          {copied ? "Copied" : "Copy"}
         </Button>
       </div>
 

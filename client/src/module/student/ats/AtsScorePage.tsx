@@ -115,7 +115,7 @@ export default function AtsScorePage() {
   const [selectedSuggestions, setSelectedSuggestions] = useState<Set<number>>(new Set());
   const [historySearch, setHistorySearch] = useState("");
   const debouncedHistorySearch = useDebounce(historySearch, 300);
-  const [chartOpen, setChartOpen] = useState(true);
+  const [chartOpen, setChartOpen] = useState(false);
   const navigate = useNavigate();
 
   const handleDownloadPdf = async () => {
@@ -807,15 +807,7 @@ export default function AtsScorePage() {
                       </label>
                       <textarea
                         value={jobDescription}
-                        onChange={(e) => {
-                          const next = e.target.value.slice(0, JD_MAX_CHARS);
-                          if (e.target.value.length > JD_MAX_CHARS) {
-                            toast.error(
-                              `Job description capped at ${JD_MAX_CHARS.toLocaleString()} characters.`,
-                            );
-                          }
-                          setJobDescription(next);
-                        }}
+                        onChange={(e) => setJobDescription(e.target.value)}
                         maxLength={JD_MAX_CHARS}
                         placeholder="Paste the job description for tailored keyword analysis..."
                         rows={5}

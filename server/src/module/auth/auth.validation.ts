@@ -68,6 +68,10 @@ export const loginSchema = z.object({
   password: z.string().min(1, "Password is required"),
 });
 
+export const deleteAccountSchema = z.object({
+  password: z.string().min(1, "Password is required to confirm account deletion"),
+});
+
 export const importGitHubSchema = z.object({
   username: z.string().min(1).max(39).regex(/^[a-zA-Z0-9](?:[a-zA-Z0-9]|-(?=[a-zA-Z0-9])){0,38}$/, "Invalid GitHub username"),
 });
@@ -80,7 +84,7 @@ export const updateProfileSchema = z.object({
   bio: z.string().max(500).optional(),
   college: z.string().optional(),
   graduationYear: z.coerce.number().int().min(1990).max(2040).optional().nullable(),
-  skills: z.array(z.string()).max(20).optional(),
+  skills: z.array(z.string().min(1).max(50, "Skill name too long")).max(20).optional(),
   location: z.string().optional(),
   linkedinUrl: z.string().url().or(z.literal("")).optional(),
   githubUrl: z.string().url().or(z.literal("")).optional(),
@@ -115,7 +119,14 @@ export const forgotPasswordSchema = z.object({
 export const resetPasswordSchema = z.object({
   email: z.string().email("Invalid email address"),
   otp: z.string().min(1, "OTP is required"),
-  newPassword: z.string().min(6, "Password must be at least 6 characters"),
+  newPassword: z
+    .string()
+    .min(8, "Password must be at least 8 characters")
+    .max(128, "Password must not exceed 128 characters")
+    .regex(/[A-Z]/, "Password must contain at least one uppercase letter")
+    .regex(/[a-z]/, "Password must contain at least one lowercase letter")
+    .regex(/[0-9]/, "Password must contain at least one number")
+    .regex(/[\W_]/, "Password must contain at least one special character"),
 });
 
 export const verifyEmailSchema = z.object({

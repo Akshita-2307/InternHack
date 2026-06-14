@@ -279,6 +279,12 @@ router.get("/companies/:slug", cacheMiddleware(1800, "yc:detail"), async (req: R
           });
           res.json(updated);
           return;
+        } else {
+          // If scraping returned null, update scrapedAt to prevent constant retries
+          await prisma.ycCompany.update({
+            where: { id: company.id },
+            data: { scrapedAt: new Date() },
+          });
         }
       } catch (scrapeErr) {
         logger.error(`Scrape failed for ${company.slug}`, scrapeErr);
@@ -288,7 +294,7 @@ router.get("/companies/:slug", cacheMiddleware(1800, "yc:detail"), async (req: R
             where: { id: company.id },
             data: { scrapedAt: new Date() },
           })
-          .catch(() => {});
+          .catch((err) => console.error("Failed to update scrapedAt:", err));
       }
     }
 

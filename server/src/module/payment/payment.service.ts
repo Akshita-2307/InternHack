@@ -100,12 +100,10 @@ export class PaymentService {
     switch (event.type) {
       case "payment.succeeded": {
         const payment = event.data;
-        // Update payment record if we can find it by checkout session id
         if (payment.checkout_session_id) {
           await prisma.payment.updateMany({
             where: { dodoPaymentId: payment.checkout_session_id },
             data: {
-              dodoPaymentId: payment.payment_id,
               amount: payment.total_amount,
               currency: payment.currency,
               status: "SUCCESS",
@@ -121,7 +119,6 @@ export class PaymentService {
           await prisma.payment.updateMany({
             where: { dodoPaymentId: payment.checkout_session_id },
             data: {
-              dodoPaymentId: payment.payment_id,
               status: "FAILED",
             },
           });
@@ -181,22 +178,43 @@ export class PaymentService {
     const now = new Date();
     const endDate = new Date(sub.next_billing_date);
 
-    // Link subscription ID and mark payment SUCCESS first, then activate the user.
-    // Order matters: payment record must be linked before any code looks it up by subscription_id.
-    await prisma.payment.updateMany({
-      where: { userId, status: "PENDING" },
-      data: { dodoSubscriptionId: sub.subscription_id, status: "SUCCESS" },
+    // Wrap entire subscription activation in database transaction to prevent
+    // race conditions where concurrent webhooks create duplicate records.
+    // All operations must succeed atomically or entire transaction rolls back.
+    await prisma.$transaction(async (tx) => {
+      // Check if subscription is already active to prevent duplicate activations
+      const existingSubscription = await tx.user.findUnique({
+        where: { id: userId },
+        select: { subscriptionStatus: true },
+      });
+
+      if (existingSubscription?.subscriptionStatus === "ACTIVE") {
+        console.log(`[Webhook] Subscription already active for user ${userId}, skipping duplicate activation`);
+        return;
+      }
+
+      // Link subscription ID and mark payment SUCCESS first, then activate the user.
+      // Order matters: payment record must be linked before any code looks it up by subscription_id.
+      // Match on dodoSubscriptionId: null so this works whether payment.succeeded already
+      // flipped the status to SUCCESS or the record is still PENDING.
+      await tx.payment.updateMany({
+        where: { userId, dodoSubscriptionId: null },
+        data: { dodoSubscriptionId: sub.subscription_id, status: "SUCCESS" },
+      });
+
+      // Update user subscription status atomically
+      await tx.user.update({
+        where: { id: userId },
+        data: {
+          subscriptionPlan: plan,
+          subscriptionStatus: "ACTIVE",
+          subscriptionStartDate: now,
+          subscriptionEndDate: endDate,
+        },
+      });
     });
 
-    await prisma.user.update({
-      where: { id: userId },
-      data: {
-        subscriptionPlan: plan,
-        subscriptionStatus: "ACTIVE",
-        subscriptionStartDate: now,
-        subscriptionEndDate: endDate,
-      },
-    });
+    // Invalidate cache after transaction succeeds
     await invalidateUserTierCache(userId);
 
     // Send confirmation email
@@ -214,65 +232,95 @@ export class PaymentService {
   }
 
   private async cancelSubscription(subscriptionId: string) {
+    await prisma.$transaction(async (tx) => {
+      const payment = await tx.payment.findFirst({
+        where: { dodoSubscriptionId: subscriptionId },
+        select: { userId: true },
+      });
+      if (!payment) return;
+
+      await tx.user.update({
+        where: { id: payment.userId },
+        data: { subscriptionStatus: "CANCELLED" },
+      });
+    });
     const payment = await prisma.payment.findFirst({
       where: { dodoSubscriptionId: subscriptionId },
       select: { userId: true },
     });
-    if (!payment) return;
-
-    await prisma.user.update({
-      where: { id: payment.userId },
-      data: { subscriptionStatus: "CANCELLED" },
-    });
-    await invalidateUserTierCache(payment.userId);
+    if (payment) {
+      await invalidateUserTierCache(payment.userId);
+    }
   }
 
   private async expireSubscription(subscriptionId: string) {
+    await prisma.$transaction(async (tx) => {
+      const payment = await tx.payment.findFirst({
+        where: { dodoSubscriptionId: subscriptionId },
+        select: { userId: true },
+      });
+      if (!payment) return;
+
+      await tx.user.update({
+        where: { id: payment.userId },
+        data: {
+          subscriptionStatus: "EXPIRED",
+          subscriptionPlan: "FREE",
+        },
+      });
+    });
     const payment = await prisma.payment.findFirst({
       where: { dodoSubscriptionId: subscriptionId },
       select: { userId: true },
     });
-    if (!payment) return;
-
-    await prisma.user.update({
-      where: { id: payment.userId },
-      data: {
-        subscriptionStatus: "EXPIRED",
-        subscriptionPlan: "FREE",
-      },
-    });
-    await invalidateUserTierCache(payment.userId);
+    if (payment) {
+      await invalidateUserTierCache(payment.userId);
+    }
   }
 
   private async holdSubscription(subscriptionId: string) {
+    await prisma.$transaction(async (tx) => {
+      const payment = await tx.payment.findFirst({
+        where: { dodoSubscriptionId: subscriptionId },
+        select: { userId: true },
+      });
+      if (!payment) return;
+
+      await tx.user.update({
+        where: { id: payment.userId },
+        data: { subscriptionStatus: "EXPIRED" },
+      });
+    });
     const payment = await prisma.payment.findFirst({
       where: { dodoSubscriptionId: subscriptionId },
       select: { userId: true },
     });
-    if (!payment) return;
-
-    await prisma.user.update({
-      where: { id: payment.userId },
-      data: { subscriptionStatus: "EXPIRED" },
-    });
-    await invalidateUserTierCache(payment.userId);
+    if (payment) {
+      await invalidateUserTierCache(payment.userId);
+    }
   }
 
   private async renewSubscription(sub: { subscription_id: string; next_billing_date: string; metadata: Record<string, string> }) {
-    const payment = await prisma.payment.findFirst({
-      where: { dodoSubscriptionId: sub.subscription_id },
-      select: { userId: true },
-    });
-    if (!payment) return;
+    let userId: number | undefined;
+    await prisma.$transaction(async (tx) => {
+      const payment = await tx.payment.findFirst({
+        where: { dodoSubscriptionId: sub.subscription_id },
+        select: { userId: true },
+      });
+      if (!payment) return;
 
-    await prisma.user.update({
-      where: { id: payment.userId },
-      data: {
-        subscriptionStatus: "ACTIVE",
-        subscriptionEndDate: new Date(sub.next_billing_date),
-      },
+      userId = payment.userId;
+      await tx.user.update({
+        where: { id: payment.userId },
+        data: {
+          subscriptionStatus: "ACTIVE",
+          subscriptionEndDate: new Date(sub.next_billing_date),
+        },
+      });
     });
-    await invalidateUserTierCache(payment.userId);
+    if (userId) {
+      await invalidateUserTierCache(userId);
+    }
   }
 
   // ── Check checkout session status (for client polling) ─────────

@@ -21,6 +21,7 @@ export interface AchievementItem {
 
 export interface User {
   id: number;
+  profileSlug?: string | null;
   name: string;
   email: string;
   role: UserRole;
@@ -48,6 +49,7 @@ export interface User {
   subscriptionPlan?: "FREE" | "MONTHLY" | "YEARLY";
   subscriptionStatus?: "ACTIVE" | "EXPIRED";
   subscriptionEndDate?: string;
+  ossTier?: string;
 }
 
 // Admin Dashboard
@@ -100,6 +102,7 @@ export interface TalentSearchResult {
   bestAtsScore: number | null;
   verifiedSkillCount: number;
   verifiedSkills: string[];
+  ossTier?: string;
 }
 
 // Saved Candidates

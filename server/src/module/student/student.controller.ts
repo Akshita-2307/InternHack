@@ -22,7 +22,6 @@ export class StudentController {
 
       const application = await this.studentService.applyToJob(jobId, req.user.id, result.data);
 
-      await prisma.usageLog.create({ data: { userId: req.user.id, action: "JOB_APPLICATION" } });
       const usage = req.usageInfo ? { used: req.usageInfo.used + 1, limit: req.usageInfo.limit } : undefined;
 
       return res.status(201).json({ message: "Application submitted successfully", application, usage });
@@ -83,26 +82,27 @@ export class StudentController {
       startOfMonth.setDate(1);
       startOfMonth.setHours(0, 0, 0, 0);
 
-      // Fetch user plan and usage count in parallel.
-      const [user, used] = await Promise.all([
-        prisma.user.findUnique({
+      const result = await prisma.$transaction(async (tx) => {
+        const user = await tx.user.findUnique({
           where: { id: req.user.id },
           select: { subscriptionPlan: true, subscriptionStatus: true, subscriptionEndDate: true },
-        }),
-        prisma.usageLog.count({
+        });
+        if (!user) throw new Error("User not found");
+
+        const tier = getPlanTier(user.subscriptionPlan, user.subscriptionStatus, user.subscriptionEndDate);
+        if (tier === "FREE") throw new Error("Upgrade to Premium to book mock interviews.");
+
+        const used = await tx.usageLog.count({
           where: { userId: req.user.id, action: "MOCK_INTERVIEW", createdAt: { gte: startOfMonth } },
-        }),
-      ]);
-      if (!user) return res.status(401).json({ message: "User not found" });
+        });
+        if (used >= 1) throw new Error("Monthly mock interview limit reached.");
 
-      const tier = getPlanTier(user.subscriptionPlan, user.subscriptionStatus, user.subscriptionEndDate);
-      if (tier === "FREE") return res.status(403).json({ message: "Upgrade to Premium to book mock interviews." });
+        await tx.usageLog.create({ data: { userId: req.user.id, action: "MOCK_INTERVIEW" } });
 
-      if (used >= 1) return res.status(429).json({ message: "Monthly mock interview limit reached.", used, limit: 1 });
+        return used + 1;
+      });
 
-      await prisma.usageLog.create({ data: { userId: req.user.id, action: "MOCK_INTERVIEW" } });
-
-      return res.json({ message: "Mock interview booked successfully", used: used + 1, limit: 1 });
+      return res.json({ message: "Mock interview booked successfully", used: result, limit: 1 });
     } catch (err) {
       next(err);
     }
@@ -163,7 +163,9 @@ export class StudentController {
       if (isNaN(adminJobId)) return res.status(400).json({ message: "Invalid job ID" });
 
       const application = await this.studentService.applyToExternalJob(req.user.id, adminJobId);
-      return res.status(201).json({ message: "Applied successfully", application });
+      const usage = req.usageInfo ? { used: req.usageInfo.used + 1, limit: req.usageInfo.limit } : undefined;
+
+      return res.status(201).json({ message: "Applied successfully", application, usage });
     } catch (error) {
       if (error instanceof Error) {
         if (error.message === "External job not found") return res.status(404).json({ message: error.message });
@@ -331,6 +333,59 @@ export class StudentController {
         if (error.message === "Not authorized") return res.status(403).json({ message: error.message });
       }
       logger.error("Failed to submit round", error);
+      return res.status(500).json({ message: "Internal Server Error" });
+    }
+  }
+
+  async getSavedJobs(req: Request, res: Response) {
+    try {
+      if (!req.user) return res.status(401).json({ message: "Authentication required" });
+      const jobs = await this.studentService.getSavedJobs(req.user.id);
+      return res.status(200).json({ jobs });
+    } catch (error) {
+      logger.error("Failed to get saved jobs", error);
+      return res.status(500).json({ message: "Internal Server Error" });
+    }
+  }
+
+  async saveJob(req: Request, res: Response) {
+    try {
+      if (!req.user) return res.status(401).json({ message: "Authentication required" });
+      const jobId = parseInt(String(req.params["jobId"]), 10);
+      if (isNaN(jobId)) return res.status(400).json({ message: "Invalid job ID" });
+      await this.studentService.saveJob(jobId, req.user.id);
+      return res.status(200).json({ message: "Job saved" });
+    } catch (error) {
+      if (error instanceof Error && error.message === "Job not found") {
+        return res.status(404).json({ message: error.message });
+      }
+      logger.error("Failed to save job", error);
+      return res.status(500).json({ message: "Internal Server Error" });
+    }
+  }
+
+  async unsaveJob(req: Request, res: Response) {
+    try {
+      if (!req.user) return res.status(401).json({ message: "Authentication required" });
+      const jobId = parseInt(String(req.params["jobId"]), 10);
+      if (isNaN(jobId)) return res.status(400).json({ message: "Invalid job ID" });
+      await this.studentService.unsaveJob(jobId, req.user.id);
+      return res.status(200).json({ message: "Job unsaved" });
+    } catch (error) {
+      logger.error("Failed to unsave job", error);
+      return res.status(500).json({ message: "Internal Server Error" });
+    }
+  }
+
+  async isJobSaved(req: Request, res: Response) {
+    try {
+      if (!req.user) return res.status(401).json({ message: "Authentication required" });
+      const jobId = parseInt(String(req.params["jobId"]), 10);
+      if (isNaN(jobId)) return res.status(400).json({ message: "Invalid job ID" });
+      const saved = await this.studentService.isJobSaved(jobId, req.user.id);
+      return res.status(200).json({ saved });
+    } catch (error) {
+      logger.error("Failed to check job saved status", error);
       return res.status(500).json({ message: "Internal Server Error" });
     }
   }

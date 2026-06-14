@@ -24,6 +24,9 @@ export class JobController {
       clearCache("jobs:list");
       return res.status(201).json({ message: "Job created successfully", job });
     } catch (error) {
+      if (error instanceof Error && error.message === "Deadline must be in the future") {
+        return res.status(422).json({ message: error.message });
+      }
       logger.error("Failed to create job", error);
       return res.status(500).json({ message: "Internal Server Error" });
     }
@@ -31,7 +34,9 @@ export class JobController {
 
   async getJobs(req: Request, res: Response) {
     try {
-      const query = jobQuerySchema.parse(req.query);
+      const result = jobQuerySchema.safeParse(req.query);
+      if (!result.success) return res.status(400).json({ message: "Validation failed", errors: result.error.flatten() });
+      const query = result.data;
       const data = await this.jobService.getJobs(query);
       return res.status(200).json(data);
     } catch (error) {
@@ -100,7 +105,9 @@ export class JobController {
         return res.status(401).json({ message: "Authentication required" });
       }
 
-      const query = jobQuerySchema.parse(req.query);
+      const result = jobQuerySchema.safeParse(req.query);
+      if (!result.success) return res.status(400).json({ message: "Validation failed", errors: result.error.flatten() });
+      const query = result.data;
       const data = await this.jobService.getRecruiterJobs(req.user.id, query);
       return res.status(200).json(data);
     } catch (error) {

@@ -38,19 +38,19 @@ interface MockInterviewFeedbackResult {
 
 export class StudentService {
   async applyToJob(jobId: number, studentId: number, data: ApplyData) {
-    const job = await prisma.job.findUnique({
-      where: { id: jobId },
-      include: { rounds: { orderBy: { orderIndex: "asc" }, take: 1 } },
-    });
+    const application = await prisma.$transaction(async (tx) => {
+      const job = await tx.job.findUnique({
+        where: { id: jobId },
+        include: { rounds: { orderBy: { orderIndex: "asc" }, take: 1 } },
+      });
 
-    if (!job) throw new Error("Job not found");
-    if (job.status !== "PUBLISHED") throw new Error("Job is not accepting applications");
-    if (job.deadline && new Date(job.deadline) < new Date()) throw new Error("Application deadline has passed");
+      if (!job) throw new Error("Job not found");
+      if (job.status !== "PUBLISHED") throw new Error("Job is not accepting applications");
+      if (job.deadline && new Date(job.deadline) < new Date()) throw new Error("Application deadline has passed");
 
-    const firstRound = job.rounds[0];
+      const firstRound = job.rounds[0];
 
-    try {
-      const application = await prisma.application.create({
+      const app = await tx.application.create({
         data: {
           jobId,
           studentId,
@@ -65,30 +65,26 @@ export class StudentService {
         },
       });
 
-      // Create first round submission if rounds exist
       if (firstRound) {
-        await prisma.roundSubmission.create({
+        await tx.roundSubmission.create({
           data: {
-            applicationId: application.id,
+            applicationId: app.id,
             roundId: firstRound.id,
             status: "IN_PROGRESS",
           },
         });
       }
 
-      // Check application badges (fire-and-forget)
-      badgeService.checkAndAwardBadges(studentId, "first_application").catch(() => {});
-      badgeService.checkAndAwardBadges(studentId, "job_apply").catch(() => {});
-      // Check 10-application milestone (fire-and-forget)
-      this.checkApplicationMilestone(studentId).catch(() => {});
+      return app;
+    });
 
-      return application;
-    } catch (err) {
-      if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2002') {
-        throw new Error("You have already applied to this job");
-      }
-      throw err;
-    }
+    // Check application badges (fire-and-forget)
+    badgeService.checkAndAwardBadges(studentId, "first_application").catch((err) => console.error("Badge check failed (first_application):", err));
+    badgeService.checkAndAwardBadges(studentId, "job_apply").catch((err) => console.error("Badge check failed (job_apply):", err));
+    // Check 10-application milestone (fire-and-forget)
+    this.checkApplicationMilestone(studentId).catch((err) => console.error("Failed to check application milestone:", err));
+
+    return application;
   }
 
   async generateMockInterviewFeedback(topic: string, transcript: MockInterviewTranscriptEntry[]): Promise<MockInterviewFeedbackResult> {
@@ -255,19 +251,23 @@ Rules:
     if (!job.isActive || job.expiresAt < new Date()) throw new Error("This job has expired");
 
     try {
-      const application = await prisma.externalJobApplication.create({
-        data: { studentId, adminJobId },
-        include: {
-          adminJob: {
-            select: { id: true, slug: true, company: true, role: true },
+      const application = await prisma.$transaction(async (tx) => {
+        const createdApplication = await tx.externalJobApplication.create({
+          data: { studentId, adminJobId },
+          include: {
+            adminJob: {
+              select: { id: true, slug: true, company: true, role: true },
+            },
           },
-        },
+        });
+        return createdApplication;
       });
+
       // Check application badges (fire-and-forget)
-      badgeService.checkAndAwardBadges(studentId, "first_application").catch(() => {});
-      badgeService.checkAndAwardBadges(studentId, "job_apply").catch(() => {});
+      badgeService.checkAndAwardBadges(studentId, "first_application").catch((err) => console.error("Badge check failed (first_application):", err));
+      badgeService.checkAndAwardBadges(studentId, "job_apply").catch((err) => console.error("Badge check failed (job_apply):", err));
       // Check 10-application milestone (fire-and-forget)
-      this.checkApplicationMilestone(studentId).catch(() => {});
+      this.checkApplicationMilestone(studentId).catch((err) => console.error("Failed to check application milestone:", err));
       return application;
     } catch (e) {
       if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === "P2002") {
@@ -344,7 +344,7 @@ Rules:
           "Browse More Jobs",
           "https://www.internhack.xyz/jobs",
         );
-        sendEmail({ to: user.email, subject: "You hit 10 applications! Keep it up", html }).catch(() => {});
+        sendEmail({ to: user.email, subject: "You hit 10 applications! Keep it up", html }).catch((err) => console.error("Failed to send milestone email:", err));
       }
     }
   }
@@ -376,6 +376,9 @@ Rules:
     if (!application) throw new Error("Application not found");
     if (application.studentId !== studentId) throw new Error("Not authorized");
     if (application.status === "WITHDRAWN") throw new Error("Already withdrawn");
+    if (application.status === "HIRED" || application.status === "REJECTED") {
+      throw new Error("Cannot withdraw an application that is already HIRED or REJECTED");
+    }
 
     return prisma.application.update({
       where: { id: applicationId },
@@ -414,6 +417,13 @@ Rules:
     ]);
     if (!application) throw new Error("Application not found");
     if (application.studentId !== studentId) throw new Error("Not authorized");
+
+    if (application.status === "WITHDRAWN") {
+      throw new Error(
+        "Withdrawn applications cannot participate in the hiring process"
+      );
+    }
+
     if (!round || round.jobId !== application.jobId) throw new Error("Round not found");
 
     let submission;
@@ -551,4 +561,63 @@ Rules:
     throw new Error("Invalid type");
   }
 
+  async getSavedJobs(studentId: number) {
+    const pref = await prisma.userJobPreference.findUnique({
+      where: { userId: studentId },
+      select: { savedJobIds: true },
+    });
+    if (!pref || pref.savedJobIds.length === 0) return [];
+
+    const jobs = await prisma.job.findMany({
+      where: { id: { in: pref.savedJobIds } },
+      include: { _count: { select: { applications: true } } },
+      orderBy: { createdAt: "desc" },
+    });
+
+    // Preserve the order from savedJobIds
+    const idOrder = pref.savedJobIds;
+    return idOrder.map((id) => jobs.find((j) => j.id === id)).filter(Boolean);
+  }
+
+  async saveJob(jobId: number, studentId: number) {
+    const job = await prisma.job.findUnique({ where: { id: jobId }, select: { id: true } });
+    if (!job) throw new Error("Job not found");
+
+    try {
+      await prisma.userJobPreference.upsert({
+        where: { userId: studentId },
+        create: { userId: studentId, savedJobIds: [jobId] },
+        update: { savedJobIds: { push: jobId } },
+      });
+    } catch (err) {
+      if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2002') {
+        return;
+      }
+      throw err;
+    }
+  }
+
+  async unsaveJob(jobId: number, studentId: number) {
+    await prisma.$transaction(async (tx) => {
+      const pref = await tx.userJobPreference.findUnique({
+        where: { userId: studentId },
+        select: { savedJobIds: true },
+      });
+      if (!pref) return;
+
+      const updated = pref.savedJobIds.filter((id) => id !== jobId);
+      await tx.userJobPreference.update({
+        where: { userId: studentId },
+        data: { savedJobIds: updated },
+      });
+    });
+  }
+
+  async isJobSaved(jobId: number, studentId: number) {
+    const pref = await prisma.userJobPreference.findUnique({
+      where: { userId: studentId },
+      select: { savedJobIds: true },
+    });
+    return pref?.savedJobIds.includes(jobId) ?? false;
+  }
 }
