@@ -22,7 +22,8 @@ import { SEO } from "../../../components/SEO";
 import { canonicalUrl } from "../../../lib/seo.utils";
 import { useAuthStore } from "../../../lib/auth.store";
 import { reportMilestone } from "../../../lib/milestone.utils";
-import { DIFF_COLOR } from "../../../lib/difficulty-colors";
+import { DIFF_COLOR } from "../../../lib/difficulty-styles";
+import { getReadingTime, countCodeBlocks, hasExercises } from "../../../utils/lessonMetadata";
 
 const FREE_LIMIT = 5;
 
@@ -58,6 +59,11 @@ function ExerciseSection({
     const p = getLocalProgress();
     return p[lessonId]?.exercisesSolved ?? {};
   });
+  useEffect(() => {
+  // eslint-disable-next-line react-hooks/set-state-in-effect -- re-sync state from localStorage when the lesson changes
+  setActiveIdx(0);
+  setSolved(getLocalProgress()[lessonId]?.exercisesSolved ?? {});
+}, [lessonId]);
 
   const exercise = exercises[activeIdx];
 
@@ -244,7 +250,11 @@ export default function FlaskLessonDetailPage() {
     const p = getLocalProgress();
     return !!p[lessonId ?? ""]?.completed;
   });
-
+useEffect(() => {
+  const p = getLocalProgress();
+  // eslint-disable-next-line react-hooks/set-state-in-effect -- re-sync completion from localStorage when the lesson changes
+  setCompleted(!!p[lessonId ?? ""]?.completed);
+}, [lessonId]);
   const section = sections.find((s) => s.id === sectionSlug);
   const sectionIndex = sections.findIndex((s) => s.id === sectionSlug);
   const sectionLessons = useMemo(
@@ -263,10 +273,10 @@ export default function FlaskLessonDetailPage() {
     setCompleted(newVal);
     if (newVal && isAuthenticated && sectionSlug) {
       const progress = getLocalProgress();
-      const allDone = sectionLessons.every((l) => progress[l.id]?.completed);
+      const allDone = lessons.every((l) => progress[l.id]?.completed);
       if (allDone) reportMilestone("COURSE_COMPLETE", "flask");
     }
-  }, [lessonId, isAuthenticated, sectionSlug, sectionLessons]);
+  }, [lessonId, isAuthenticated, sectionSlug]);
 
   if (sectionIndex >= FREE_LIMIT && !isAuthenticated) {
     return <Navigate to={basePath} replace />;
@@ -323,6 +333,12 @@ export default function FlaskLessonDetailPage() {
               </div>
               <div className="flex items-center gap-3 flex-wrap text-[10px] font-mono uppercase tracking-widest text-stone-500 dark:text-stone-400">
                 <span className={DIFF_COLOR[lesson.difficulty]}>/ {lesson.difficulty.toLowerCase()}</span>
+                <span className="h-1 w-1 bg-stone-300 dark:bg-stone-700" />
+                <span>🕐 {getReadingTime(lesson.content.explanation)}</span>
+                <span className="h-1 w-1 bg-stone-300 dark:bg-stone-700" />
+                <span>{hasExercises(lesson) ? "✅" : "❌"} exercises</span>
+                <span className="h-1 w-1 bg-stone-300 dark:bg-stone-700" />
+                <span>💻 {countCodeBlocks(lesson)} examples</span>
                 {completed && (
                   <>
                     <span className="h-1 w-1 bg-stone-300 dark:bg-stone-700" />

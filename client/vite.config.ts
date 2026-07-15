@@ -1,4 +1,4 @@
-import { defineConfig } from 'vite'
+import { defineConfig } from 'vitest/config'
 import react from '@vitejs/plugin-react'
 import tailwindcss from '@tailwindcss/vite'
 import prerender from '@prerenderer/rollup-plugin'
@@ -11,7 +11,6 @@ const PRERENDER_ROUTES = [
   '/login',
   '/register',
   '/forgot-password',
-  '/for-recruiters',
   '/terms',
   '/privacy',
   '/refund',
@@ -30,7 +29,6 @@ const PRERENDER_ROUTES = [
   '/learn/data-analytics',
   '/learn/interview',
   '/learn/dsa',
-  '/learn/dsa/patterns',
   '/learn/dsa/companies',
   '/learn/aptitude',
   '/learn/aptitude/companies',
@@ -98,6 +96,10 @@ server: {
     },
   },
 },
+  test: {
+    globals: true,
+    environment: "node",
+  },
   build: {
     chunkSizeWarningLimit: 2000,
     rollupOptions: {

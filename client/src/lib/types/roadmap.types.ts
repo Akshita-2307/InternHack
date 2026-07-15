@@ -87,6 +87,8 @@ export interface RoadmapListItem {
   isAiGenerated?: boolean;
   /** Set for AI-generated roadmaps that are not publicly published */
   ownerUserId?: number | null;
+  /** Creator name for community (publicly shared) roadmaps */
+  creatorName?: string | null;
 }
 
 export interface WeeklyPlanWeek {
@@ -145,6 +147,7 @@ export interface RoadmapEnrollment {
   id: number;
   userId: number;
   roadmapId: number;
+  shareToken: string;
   hoursPerWeek: number;
   preferredDays: DayOfWeek[];
   startDate: string;
@@ -182,7 +185,6 @@ export interface RoadmapEnrollmentListItem {
     tags?: string[];
     isAiGenerated?: boolean;
     ownerUserId?: number | null;
-    ownerUserId: number | null;
   };
   createdAt: string;
 }
@@ -192,4 +194,23 @@ export interface EnrollInput {
   preferredDays: DayOfWeek[];
   experienceLevel: ExperienceLevel;
   goal: EnrollmentGoal;
+}
+
+export interface StudyBuddyDetails {
+  id: number;
+  name: string;
+  profilePic: string | null;
+  college: string | null;
+  experienceLevel: ExperienceLevel;
+  percentComplete: number;
+  completedTopics: number;
+  currentStreak: number;
+  matchedAt: string;
+}
+
+export interface StudyBuddyResponse {
+  enabled: boolean;
+  preferSameCollege: boolean;
+  status: "NOT_OPTED_IN" | "SEARCHING" | "MATCHED";
+  buddy: StudyBuddyDetails | null;
 }

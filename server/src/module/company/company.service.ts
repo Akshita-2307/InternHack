@@ -1,10 +1,12 @@
 ﻿import { prisma } from "../../database/db.js";
 import type { Prisma } from "@prisma/client";
 import type { PlanTier } from "../../config/usage-limits.js";
-import DOMPurify from "isomorphic-dompurify";
+import sanitizeHtml from "sanitize-html";
 import { cacheGet, cacheSet, cacheDelPattern } from "../../utils/cache.js";
 
-const sanitize = (s: string) => DOMPurify.sanitize(s, { ALLOWED_TAGS: [] });
+// Strip all HTML tags, leaving plain text. sanitize-html is pure CommonJS (no
+// jsdom), so it avoids the ESM-only transitive deps that crash the runtime.
+const sanitize = (s: string) => sanitizeHtml(s, { allowedTags: [], allowedAttributes: {} });
 
 const COMPANY_LIST_TTL = 3600;
 const COMPANY_DETAIL_TTL = 3600;
@@ -38,7 +40,6 @@ interface SubmitReviewInput {
 interface ContributeCompanyInput {
   name: string;
   description: string;
-  mission?: string | undefined;
   industry: string;
   size: "STARTUP" | "SMALL" | "MEDIUM" | "LARGE" | "ENTERPRISE";
   city: string;
@@ -65,8 +66,10 @@ export class CompanyService {
     const cached = await cacheGet(cacheKey);
     if (cached) return cached as never;
 
-    const page = Math.max(1, parseInt(params.page || "1", 10));
-    const limit = Math.min(50, Math.max(1, parseInt(params.limit || "12", 10)));
+    const parsedPage = Number.parseInt(params.page ?? "1", 10);
+    const page = Number.isNaN(parsedPage) ? 1 : Math.max(1, parsedPage);
+    const parsedLimit = Number.parseInt(params.limit ?? "12", 10);
+    const limit = Number.isNaN(parsedLimit)? 12: Math.min(50, Math.max(1, parsedLimit));
     const skip = (page - 1) * limit;
 
     const where: Prisma.companyWhereInput = { isApproved: true };

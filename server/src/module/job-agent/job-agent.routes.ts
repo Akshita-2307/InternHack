@@ -1,6 +1,5 @@
 import { Router } from "express";
-import rateLimit, { ipKeyGenerator } from "express-rate-limit";
-import { createRateLimitStore } from "../../utils/rate-limit-store.js";
+import { rateLimit, ipKeyGenerator } from "express-rate-limit";
 import { authMiddleware } from "../../middleware/auth.middleware.js";
 import { requireRole } from "../../middleware/role.middleware.js";
 import { usageLimit } from "../../middleware/usage-limit.middleware.js";
@@ -17,9 +16,8 @@ const chatBurstLimiter = rateLimit({
   max: 10,
   standardHeaders: true,
   legacyHeaders: false,
-  store: createRateLimitStore("chat-burst"),
   keyGenerator: (req) => {
-    const userId = (req as any).user?.id;
+    const userId = req.user?.id;
     return userId ? `u:${userId}` : `ip:${ipKeyGenerator(req.ip || "unknown_ip")}`;
   },
   message: { message: "You're sending messages too quickly. Please wait a moment and try again." },
